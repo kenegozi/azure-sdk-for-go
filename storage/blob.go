@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -59,22 +58,32 @@ type Blob struct {
 }
 
 // BlobProperties contains various properties of a blob
-// returned in various endpoints like ListBlobs or GetBlobProperties.
+// returned in various endpoints like ListBlobs or GetBlobProperties, or
+// set on blobs as part of the many Put operations and SetBlobProperties
 type BlobProperties struct {
-	LastModified          string   `xml:"Last-Modified"`
-	Etag                  string   `xml:"Etag"`
-	ContentMD5            string   `xml:"Content-MD5"`
-	ContentLength         int64    `xml:"Content-Length"`
-	ContentType           string   `xml:"Content-Type"`
-	ContentEncoding       string   `xml:"Content-Encoding"`
-	BlobType              BlobType `xml:"x-ms-blob-blob-type"`
-	SequenceNumber        int64    `xml:"x-ms-blob-sequence-number"`
-	CopyID                string   `xml:"CopyId"`
-	CopyStatus            string   `xml:"CopyStatus"`
-	CopySource            string   `xml:"CopySource"`
-	CopyProgress          string   `xml:"CopyProgress"`
-	CopyCompletionTime    string   `xml:"CopyCompletionTime"`
-	CopyStatusDescription string   `xml:"CopyStatusDescription"`
+	LastModified          string            `xml:"Last-Modified" header:"Last-Modified"`
+	Etag                  string            `xml:"Etag" header:"Etag"`
+	ContentMD5            string            `xml:"Content-MD5" header:"Content-MD5"`
+	ContentLength         int64             `xml:"Content-Length" header:"Content-Length"`
+	ContentType           string            `xml:"Content-Type" header:"Content-Type"`
+	ContentEncoding       string            `xml:"Content-Encoding" header:"Content-Encoding"`
+	BlobType              BlobType          `xml:"x-ms-blob-blob-type" header:"x-ms-blob-type"`
+	SequenceNumber        *int64            `xml:"x-ms-blob-sequence-number" header:"x-ms-blob-sequence-number"`
+	CopyID                string            `xml:"CopyId" header:"x-ms-copy-id"`
+	CopyStatus            string            `xml:"CopyStatus" header:"x-ms-copy-status"`
+	CopySource            string            `xml:"CopySource" header:"x-ms-copy-source"`
+	CopyProgress          string            `xml:"CopyProgress" header:"x-ms-copy-progress"`
+	CopyCompletionTime    string            `xml:"CopyCompletionTime" header:"x-ms-copy-completion-time"`
+	CopyStatusDescription string            `xml:"CopyStatusDescription" header:"x-ms-copy-status-description"`
+	ExtraHeaders          map[string]string `header:"@"`
+}
+
+// NewBlobProperties returns a new empty BlobProperties, with its ExtraHeaders
+// initialized to an empty map, ready to be populated.
+func NewBlobProperties() BlobProperties {
+	return BlobProperties{
+		ExtraHeaders: map[string]string{},
+	}
 }
 
 // BlobListResponse contains the response fields from ListBlobs call.
@@ -505,66 +514,53 @@ func (b BlobStorageClient) GetBlobProperties(container, name string) (*BlobPrope
 	if err := checkRespCode(resp.statusCode, []int{http.StatusOK}); err != nil {
 		return nil, err
 	}
+	bprops := BlobProperties{}
 
-	var contentLength int64
-	contentLengthStr := resp.headers.Get("Content-Length")
-	if contentLengthStr != "" {
-		contentLength, err = strconv.ParseInt(contentLengthStr, 0, 64)
-		if err != nil {
-			return nil, err
+	hs := make(map[string]string)
+	for k, v := range resp.headers {
+		if len(v) > 0 {
+			hs[k] = v[0]
 		}
 	}
 
-	var sequenceNum int64
-	sequenceNumStr := resp.headers.Get("x-ms-blob-sequence-number")
-	if sequenceNumStr != "" {
-		sequenceNum, err = strconv.ParseInt(sequenceNumStr, 0, 64)
-		if err != nil {
-			return nil, err
-		}
-	}
+	unmarshalProperties(hs, &bprops)
 
-	return &BlobProperties{
-		LastModified:          resp.headers.Get("Last-Modified"),
-		Etag:                  resp.headers.Get("Etag"),
-		ContentMD5:            resp.headers.Get("Content-MD5"),
-		ContentLength:         contentLength,
-		ContentEncoding:       resp.headers.Get("Content-Encoding"),
-		SequenceNumber:        sequenceNum,
-		CopyCompletionTime:    resp.headers.Get("x-ms-copy-completion-time"),
-		CopyStatusDescription: resp.headers.Get("x-ms-copy-status-description"),
-		CopyID:                resp.headers.Get("x-ms-copy-id"),
-		CopyProgress:          resp.headers.Get("x-ms-copy-progress"),
-		CopySource:            resp.headers.Get("x-ms-copy-source"),
-		CopyStatus:            resp.headers.Get("x-ms-copy-status"),
-		BlobType:              BlobType(resp.headers.Get("x-ms-blob-type")),
-	}, nil
+	return &bprops, nil
+}
+
+// PutBlockBlob creates a new block blob with the supplied content,
+// or replaces the content of an existing block blob.
+//
+// Blobs larger than 64MB will be rejected by Azure Blob Storage.
+//
+// see https://msdn.microsoft.com/en-us/library/azure/dd179451.aspx
+//
+// For uploading large blobs (even smaller than the 64 MB limit),
+// it is recommended to use chunked uploading
+// using CreateBlockBlob, multiple calls to PutBlock, and PutBlockList.
+// see upcoming package github.com/Azure/azure-sdk-for-go/storage/blobutil
+// for convenience methods.
+func (b BlobStorageClient) PutBlockBlob(container, name string, size int64, body io.Reader, props BlobProperties) error {
+	props.ContentLength = size
+	props.BlobType = BlobTypeBlock
+	return b.putBlob(container, name, url.Values{}, body, props)
 }
 
 // CreateBlockBlob initializes an empty block blob with no blocks.
 //
 // See https://msdn.microsoft.com/en-us/library/azure/dd179451.aspx
-func (b BlobStorageClient) CreateBlockBlob(container, name string) error {
-	path := fmt.Sprintf("%s/%s", container, name)
-	uri := b.client.getEndpoint(blobServiceName, path, url.Values{})
-	headers := b.client.getStandardHeaders()
-	headers["x-ms-blob-type"] = string(BlobTypeBlock)
-	headers["Content-Length"] = fmt.Sprintf("%v", 0)
-
-	resp, err := b.client.exec("PUT", uri, headers, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.body.Close()
-	return checkRespCode(resp.statusCode, []int{http.StatusCreated})
+func (b BlobStorageClient) CreateBlockBlob(container, name string, props BlobProperties) error {
+	props.ContentLength = 0
+	props.BlobType = BlobTypeBlock
+	return b.putBlob(container, name, url.Values{}, nil, props)
 }
 
 // PutBlock saves the given data chunk to the specified block blob with
 // given ID.
 //
 // See https://msdn.microsoft.com/en-us/library/azure/dd135726.aspx
-func (b BlobStorageClient) PutBlock(container, name, blockID string, chunk []byte) error {
-	return b.PutBlockWithLength(container, name, blockID, uint64(len(chunk)), bytes.NewReader(chunk))
+func (b BlobStorageClient) PutBlock(container, name, blockID string, chunk []byte, props BlobProperties) error {
+	return b.PutBlockWithLength(container, name, blockID, uint64(len(chunk)), bytes.NewReader(chunk), props)
 }
 
 // PutBlockWithLength saves the given data stream of exactly specified size to
@@ -572,31 +568,45 @@ func (b BlobStorageClient) PutBlock(container, name, blockID string, chunk []byt
 // comes as stream but the length is known in advance.
 //
 // See https://msdn.microsoft.com/en-us/library/azure/dd135726.aspx
-func (b BlobStorageClient) PutBlockWithLength(container, name, blockID string, size uint64, blob io.Reader) error {
-	uri := b.client.getEndpoint(blobServiceName, pathForBlob(container, name), url.Values{"comp": {"block"}, "blockid": {blockID}})
-	headers := b.client.getStandardHeaders()
-	headers["x-ms-blob-type"] = string(BlobTypeBlock)
-	headers["Content-Length"] = fmt.Sprintf("%v", size)
-
-	resp, err := b.client.exec("PUT", uri, headers, blob)
-	if err != nil {
-		return err
-	}
-	defer resp.body.Close()
-	return checkRespCode(resp.statusCode, []int{http.StatusCreated})
+func (b BlobStorageClient) PutBlockWithLength(container, name, blockID string, size uint64, blob io.Reader, props BlobProperties) error {
+	props.ContentLength = int64(size)
+	props.BlobType = BlobTypeBlock
+	return b.putBlob(container, name, url.Values{"comp": {"block"}, "blockid": {blockID}}, blob, props)
 }
 
 // PutBlockList saves list of blocks to the specified block blob.
 //
 // See https://msdn.microsoft.com/en-us/library/azure/dd179467.aspx
-func (b BlobStorageClient) PutBlockList(container, name string, blocks []Block) error {
+func (b BlobStorageClient) PutBlockList(container, name string, blocks []Block, props BlobProperties) error {
 	blockListXML := prepareBlockListRequest(blocks)
+	props.ContentLength = int64(len(blockListXML))
+	return b.putBlob(container, name, url.Values{"comp": {"blocklist"}}, strings.NewReader(blockListXML), props)
+}
 
-	uri := b.client.getEndpoint(blobServiceName, pathForBlob(container, name), url.Values{"comp": {"blocklist"}})
-	headers := b.client.getStandardHeaders()
-	headers["Content-Length"] = fmt.Sprintf("%v", len(blockListXML))
+// SetBlobProperties sets the blob properties.
+//
+// This call will *replace* all of the properties on the blob. Properties that are
+// not specified will be cleared from the blob.
+//
+// See https://msdn.microsoft.com/en-us/library/azure/ee691966.aspx
+func (b BlobStorageClient) SetBlobProperties(container, name string, props BlobProperties) error {
+	return b.putBlob(container, name, url.Values{"comp": {"properties"}}, nil, props)
+}
 
-	resp, err := b.client.exec("PUT", uri, headers, strings.NewReader(blockListXML))
+func (b BlobStorageClient) putBlob(container, name string, query url.Values, body io.Reader, props BlobProperties) error {
+	headers := make(map[string]string)
+	err := marshalProperties(&props, headers)
+	if err != nil {
+		return err
+	}
+
+	uri := b.client.getEndpoint(blobServiceName, pathForBlob(container, name), query)
+	//	headers["x-ms-blob-type"] = string(BlobTypeBlock)
+	//	headers["Content-Length"] = fmt.Sprintf("%v", size)
+	for k, v := range b.client.getStandardHeaders() {
+		headers[k] = v
+	}
+	resp, err := b.client.exec("PUT", uri, headers, body)
 	if err != nil {
 		return err
 	}
@@ -628,21 +638,11 @@ func (b BlobStorageClient) GetBlockList(container, name string, blockType BlockL
 // be created using this method before writing pages.
 //
 // See https://msdn.microsoft.com/en-us/library/azure/dd179451.aspx
-func (b BlobStorageClient) PutPageBlob(container, name string, size int64) error {
-	path := fmt.Sprintf("%s/%s", container, name)
-	uri := b.client.getEndpoint(blobServiceName, path, url.Values{})
-	headers := b.client.getStandardHeaders()
-	headers["x-ms-blob-type"] = string(BlobTypePage)
-	headers["x-ms-blob-content-length"] = fmt.Sprintf("%v", size)
-	headers["Content-Length"] = fmt.Sprintf("%v", 0)
-
-	resp, err := b.client.exec("PUT", uri, headers, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.body.Close()
-
-	return checkRespCode(resp.statusCode, []int{http.StatusCreated})
+func (b BlobStorageClient) PutPageBlob(container, name string, size int64, props BlobProperties) error {
+	props.BlobType = BlobTypePage
+	props.ContentLength = 0
+	props.ExtraHeaders["x-ms-blob-content-length"] = fmt.Sprintf("%v", size)
+	return b.putBlob(container, name, url.Values{}, nil, props)
 }
 
 // PutPage writes a range of pages to a page blob or clears the given range.
@@ -650,13 +650,11 @@ func (b BlobStorageClient) PutPageBlob(container, name string, size int64) error
 // with 512-byte boundaries and chunk must be of size multiplies by 512.
 //
 // See https://msdn.microsoft.com/en-us/library/ee691975.aspx
-func (b BlobStorageClient) PutPage(container, name string, startByte, endByte int64, writeType PageWriteType, chunk []byte) error {
-	path := fmt.Sprintf("%s/%s", container, name)
-	uri := b.client.getEndpoint(blobServiceName, path, url.Values{"comp": {"page"}})
-	headers := b.client.getStandardHeaders()
-	headers["x-ms-blob-type"] = string(BlobTypePage)
-	headers["x-ms-page-write"] = string(writeType)
-	headers["x-ms-range"] = fmt.Sprintf("bytes=%v-%v", startByte, endByte)
+func (b BlobStorageClient) PutPage(container, name string, startByte, endByte int64, writeType PageWriteType, chunk []byte, props BlobProperties) error {
+
+	props.ExtraHeaders["x-ms-blob-type"] = string(BlobTypePage)
+	props.ExtraHeaders["x-ms-page-write"] = string(writeType)
+	props.ExtraHeaders["x-ms-range"] = fmt.Sprintf("bytes=%v-%v", startByte, endByte)
 
 	var contentLength int64
 	var data io.Reader
@@ -667,15 +665,9 @@ func (b BlobStorageClient) PutPage(container, name string, startByte, endByte in
 		contentLength = int64(len(chunk))
 		data = bytes.NewReader(chunk)
 	}
-	headers["Content-Length"] = fmt.Sprintf("%v", contentLength)
+	props.ExtraHeaders["Content-Length"] = fmt.Sprintf("%v", contentLength)
 
-	resp, err := b.client.exec("PUT", uri, headers, data)
-	if err != nil {
-		return err
-	}
-	defer resp.body.Close()
-
-	return checkRespCode(resp.statusCode, []int{http.StatusCreated})
+	return b.putBlob(container, name, url.Values{"comp": {"page"}}, data, props)
 }
 
 // GetPageRanges returns the list of valid page ranges for a page blob.

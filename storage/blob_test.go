@@ -398,7 +398,7 @@ func (s *StorageBlobSuite) TestPutBlock(c *chk.C) {
 	blob := randString(20)
 	chunk := []byte(randString(1024))
 	blockID := base64.StdEncoding.EncodeToString([]byte("foo"))
-	c.Assert(cli.PutBlock(cnt, blob, blockID, chunk), chk.IsNil)
+	c.Assert(cli.PutBlock(cnt, blob, blockID, chunk, NewBlobProperties()), chk.IsNil)
 }
 
 func (s *StorageBlobSuite) TestGetBlockList_PutBlockList(c *chk.C) {
@@ -412,7 +412,7 @@ func (s *StorageBlobSuite) TestGetBlockList_PutBlockList(c *chk.C) {
 	blockID := base64.StdEncoding.EncodeToString([]byte("foo"))
 
 	// Put one block
-	c.Assert(cli.PutBlock(cnt, blob, blockID, chunk), chk.IsNil)
+	c.Assert(cli.PutBlock(cnt, blob, blockID, chunk, NewBlobProperties()), chk.IsNil)
 	defer cli.deleteBlob(cnt, blob)
 
 	// Get committed blocks
@@ -429,7 +429,7 @@ func (s *StorageBlobSuite) TestGetBlockList_PutBlockList(c *chk.C) {
 
 	c.Assert(len(uncommitted.UncommittedBlocks), chk.Equals, 1)
 	// Commit block list
-	c.Assert(cli.PutBlockList(cnt, blob, []Block{{blockID, BlockStatusUncommitted}}), chk.IsNil)
+	c.Assert(cli.PutBlockList(cnt, blob, []Block{{blockID, BlockStatusUncommitted}}, NewBlobProperties()), chk.IsNil)
 
 	// Get all blocks
 	all, err := cli.GetBlockList(cnt, blob, BlockListTypeAll)
@@ -450,7 +450,7 @@ func (s *StorageBlobSuite) TestCreateBlockBlob(c *chk.C) {
 	defer cli.deleteContainer(cnt)
 
 	blob := randString(20)
-	c.Assert(cli.CreateBlockBlob(cnt, blob), chk.IsNil)
+	c.Assert(cli.CreateBlockBlob(cnt, blob, NewBlobProperties()), chk.IsNil)
 
 	// Verify
 	blocks, err := cli.GetBlockList(cnt, blob, BlockListTypeAll)
@@ -467,7 +467,7 @@ func (s *StorageBlobSuite) TestPutPageBlob(c *chk.C) {
 
 	blob := randString(20)
 	size := int64(10 * 1024 * 1024)
-	c.Assert(cli.PutPageBlob(cnt, blob, size), chk.IsNil)
+	c.Assert(cli.PutPageBlob(cnt, blob, size, NewBlobProperties()), chk.IsNil)
 
 	// Verify
 	props, err := cli.GetBlobProperties(cnt, blob)
@@ -484,14 +484,14 @@ func (s *StorageBlobSuite) TestPutPagesUpdate(c *chk.C) {
 
 	blob := randString(20)
 	size := int64(10 * 1024 * 1024) // larger than we'll use
-	c.Assert(cli.PutPageBlob(cnt, blob, size), chk.IsNil)
+	c.Assert(cli.PutPageBlob(cnt, blob, size, NewBlobProperties()), chk.IsNil)
 
 	chunk1 := []byte(randString(1024))
 	chunk2 := []byte(randString(512))
 
 	// Append chunks
-	c.Assert(cli.PutPage(cnt, blob, 0, int64(len(chunk1)-1), PageWriteTypeUpdate, chunk1), chk.IsNil)
-	c.Assert(cli.PutPage(cnt, blob, int64(len(chunk1)), int64(len(chunk1)+len(chunk2)-1), PageWriteTypeUpdate, chunk2), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, 0, int64(len(chunk1)-1), PageWriteTypeUpdate, chunk1, NewBlobProperties()), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, int64(len(chunk1)), int64(len(chunk1)+len(chunk2)-1), PageWriteTypeUpdate, chunk2, NewBlobProperties()), chk.IsNil)
 
 	// Verify contents
 	out, err := cli.GetBlobRange(cnt, blob, fmt.Sprintf("%v-%v", 0, len(chunk1)+len(chunk2)-1))
@@ -504,7 +504,7 @@ func (s *StorageBlobSuite) TestPutPagesUpdate(c *chk.C) {
 
 	// Overwrite first half of chunk1
 	chunk0 := []byte(randString(512))
-	c.Assert(cli.PutPage(cnt, blob, 0, int64(len(chunk0)-1), PageWriteTypeUpdate, chunk0), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, 0, int64(len(chunk0)-1), PageWriteTypeUpdate, chunk0, NewBlobProperties()), chk.IsNil)
 
 	// Verify contents
 	out, err = cli.GetBlobRange(cnt, blob, fmt.Sprintf("%v-%v", 0, len(chunk1)+len(chunk2)-1))
@@ -523,14 +523,14 @@ func (s *StorageBlobSuite) TestPutPagesClear(c *chk.C) {
 
 	blob := randString(20)
 	size := int64(10 * 1024 * 1024) // larger than we'll use
-	c.Assert(cli.PutPageBlob(cnt, blob, size), chk.IsNil)
+	c.Assert(cli.PutPageBlob(cnt, blob, size, NewBlobProperties()), chk.IsNil)
 
 	// Put 0-2047
 	chunk := []byte(randString(2048))
-	c.Assert(cli.PutPage(cnt, blob, 0, 2047, PageWriteTypeUpdate, chunk), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, 0, 2047, PageWriteTypeUpdate, chunk, NewBlobProperties()), chk.IsNil)
 
 	// Clear 512-1023
-	c.Assert(cli.PutPage(cnt, blob, 512, 1023, PageWriteTypeClear, nil), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, 512, 1023, PageWriteTypeClear, nil, NewBlobProperties()), chk.IsNil)
 
 	// Verify contents
 	out, err := cli.GetBlobRange(cnt, blob, "0-2047")
@@ -549,7 +549,7 @@ func (s *StorageBlobSuite) TestGetPageRanges(c *chk.C) {
 
 	blob := randString(20)
 	size := int64(10 * 1024 * 1024) // larger than we'll use
-	c.Assert(cli.PutPageBlob(cnt, blob, size), chk.IsNil)
+	c.Assert(cli.PutPageBlob(cnt, blob, size, NewBlobProperties()), chk.IsNil)
 
 	// Get page ranges on empty blob
 	out, err := cli.GetPageRanges(cnt, blob)
@@ -557,18 +557,51 @@ func (s *StorageBlobSuite) TestGetPageRanges(c *chk.C) {
 	c.Assert(len(out.PageList), chk.Equals, 0)
 
 	// Add 0-512 page
-	c.Assert(cli.PutPage(cnt, blob, 0, 511, PageWriteTypeUpdate, []byte(randString(512))), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, 0, 511, PageWriteTypeUpdate, []byte(randString(512)), NewBlobProperties()), chk.IsNil)
 
 	out, err = cli.GetPageRanges(cnt, blob)
 	c.Assert(err, chk.IsNil)
 	c.Assert(len(out.PageList), chk.Equals, 1)
 
 	// Add 1024-2048
-	c.Assert(cli.PutPage(cnt, blob, 1024, 2047, PageWriteTypeUpdate, []byte(randString(1024))), chk.IsNil)
+	c.Assert(cli.PutPage(cnt, blob, 1024, 2047, PageWriteTypeUpdate, []byte(randString(1024)), NewBlobProperties()), chk.IsNil)
 
 	out, err = cli.GetPageRanges(cnt, blob)
 	c.Assert(err, chk.IsNil)
 	c.Assert(len(out.PageList), chk.Equals, 2)
+}
+
+func (s *StorageBlobSuite) Test_PutBlockBlob_WithProperties(c *chk.C) {
+	cli := getBlobClient(c)
+	cnt := randContainer()
+	c.Assert(cli.CreateContainer(cnt, ContainerAccessTypePrivate), chk.IsNil)
+	defer cli.deleteContainer(cnt)
+
+	blob := randString(20)
+	props := NewBlobProperties()
+	props.ContentType = "text/plain"
+
+	body := []byte{72, 101, 108, 108, 111}
+
+	c.Assert(cli.PutBlockBlob(cnt, blob, int64(len(body)), bytes.NewReader(body), props), chk.IsNil)
+
+	blobBody, err := cli.GetBlob(cnt, blob)
+	c.Assert(err, chk.IsNil)
+	defer blobBody.Close()
+
+	b, err := ioutil.ReadAll(blobBody)
+	c.Assert(err, chk.IsNil)
+	c.Assert(b, chk.DeepEquals, body)
+
+	propsReturned, err := cli.GetBlobProperties(cnt, blob)
+	c.Assert(err, chk.IsNil)
+	c.Assert(propsReturned.ContentType, chk.Equals, "text/plain")
+}
+
+func (s *StorageBlobSuite) Test_BlobProperties_IsRegisteredForHeaderMarshalling(c *chk.C) {
+	props := NewBlobProperties()
+	err := unmarshalProperties(map[string]string{}, &props)
+	c.Assert(err, chk.IsNil)
 }
 
 func deleteTestContainers(cli BlobStorageClient) error {
@@ -591,20 +624,7 @@ func deleteTestContainers(cli BlobStorageClient) error {
 }
 
 func (b BlobStorageClient) putSingleBlockBlob(container, name string, chunk []byte) error {
-	if len(chunk) > MaxBlobBlockSize {
-		return fmt.Errorf("storage: provided chunk (%d bytes) cannot fit into single-block blob (max %d bytes)", len(chunk), MaxBlobBlockSize)
-	}
-
-	uri := b.client.getEndpoint(blobServiceName, pathForBlob(container, name), url.Values{})
-	headers := b.client.getStandardHeaders()
-	headers["x-ms-blob-type"] = string(BlobTypeBlock)
-	headers["Content-Length"] = fmt.Sprintf("%v", len(chunk))
-
-	resp, err := b.client.exec("PUT", uri, headers, bytes.NewReader(chunk))
-	if err != nil {
-		return err
-	}
-	return checkRespCode(resp.statusCode, []int{http.StatusCreated})
+	return b.PutBlockBlob(container, name, int64(len(chunk)), bytes.NewReader(chunk), NewBlobProperties())
 }
 
 func randContainer() string {

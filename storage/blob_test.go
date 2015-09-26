@@ -389,6 +389,29 @@ func (s *StorageBlobSuite) TestGetBlobRange(c *chk.C) {
 	}
 }
 
+func (s *StorageBlobSuite) TestPutBlockBlob(c *chk.C) {
+	cli := getBlobClient(c)
+	cnt := randContainer()
+	c.Assert(cli.CreateContainer(cnt, ContainerAccessTypePrivate), chk.IsNil)
+	defer cli.deleteContainer(cnt)
+
+	blob := randString(20)
+
+	contentType := "text/plain"
+	msg := []byte("Hello blobs!")
+	c.Assert(cli.PutBlockBlob(cnt, blob, uint64(len(msg)), bytes.NewReader(msg), map[string]string{"Content-Type": contentType}), chk.IsNil)
+
+	newProps, err := cli.GetBlobProperties(cnt, blob)
+	c.Assert(err, chk.IsNil)
+	c.Assert(newProps.ContentType, chk.Equals, contentType)
+
+	newBlob, err := cli.GetBlob(cnt, blob)
+	c.Assert(err, chk.IsNil)
+	newBlobContent, err := ioutil.ReadAll(newBlob)
+	c.Assert(err, chk.IsNil)
+	c.Assert(newBlobContent, chk.DeepEquals, msg)
+}
+
 func (s *StorageBlobSuite) TestPutBlock(c *chk.C) {
 	cli := getBlobClient(c)
 	cnt := randContainer()

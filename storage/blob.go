@@ -538,6 +538,7 @@ func (b BlobStorageClient) GetBlobProperties(container, name string) (*BlobPrope
 		CopySource:            resp.headers.Get("x-ms-copy-source"),
 		CopyStatus:            resp.headers.Get("x-ms-copy-status"),
 		BlobType:              BlobType(resp.headers.Get("x-ms-blob-type")),
+		ContentType:           resp.headers.Get("Content-Type"),
 	}, nil
 }
 
@@ -565,6 +566,29 @@ func (b BlobStorageClient) CreateBlockBlob(container, name string) error {
 // See https://msdn.microsoft.com/en-us/library/azure/dd135726.aspx
 func (b BlobStorageClient) PutBlock(container, name, blockID string, chunk []byte) error {
 	return b.PutBlockWithLength(container, name, blockID, uint64(len(chunk)), bytes.NewReader(chunk))
+}
+
+// PutBlockBlob creates a new block blob with the supplied content,
+// or replaces the content of an existing block blob.
+//
+// Blobs larger than 64MB will be rejected by Azure Blob Storage.
+//
+// see https://msdn.microsoft.com/en-us/library/azure/dd179451.aspx
+func (b BlobStorageClient) PutBlockBlob(container, name string, size uint64, blob io.Reader, headers map[string]string) error {
+	uri := b.client.getEndpoint(blobServiceName, pathForBlob(container, name), url.Values{})
+	hs := b.client.getStandardHeaders()
+	for k, v := range headers {
+		hs[k] = v
+	}
+	hs["x-ms-blob-type"] = string(BlobTypeBlock)
+	hs["Content-Length"] = fmt.Sprintf("%v", size)
+
+	resp, err := b.client.exec("PUT", uri, hs, blob)
+	if err != nil {
+		return err
+	}
+	defer resp.body.Close()
+	return checkRespCode(resp.statusCode, []int{http.StatusCreated})
 }
 
 // PutBlockWithLength saves the given data stream of exactly specified size to
